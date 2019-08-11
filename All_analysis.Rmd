@@ -1,0 +1,1083 @@
+---
+title: "All Analysis"
+output: html_notebook
+---
+
+
+
+# Startup
+Load libraries
+
+```{r}
+library(gProfileR)
+library(gplots)
+library(pathview)
+library(STRINGdb)
+library(biomaRt)
+library(igraph)
+library(GGally)
+
+source("/nfs/team205/tpcg/bin/scripts/usefulFunctions.R")
+```
+
+
+
+Load biomart
+
+```{r}
+# Mouse
+#mart <- useMart(biomart = "ENSEMBL_MART_ENSEMBL",
+#                dataset = "mmusculus_gene_ensembl",
+#                host = "www.ensembl.org")
+#View(listAttributes(mart))
+#bm.query_mouse <- getBM(attributes = c("ensembl_gene_id", "external_gene_name", 
+#                               "ensembl_peptide_id"),
+#                        mart = mart)
+
+bm.query_mouse = read.csv("../data/bm.query_mouse.csv", header = T, row.names = 1)
+```
+
+
+
+Load data
+
+```{r}
+xi_day4 = read.table("../data/Day4_diff_genes_2015.txt", header = T)
+xi_day6 = read.table("../data/Day6_diff_genes_2015.txt", header = T)
+
+gz_day4 = read.table("../data/DESeq2_DEgenes_D4treated_D4control_FDR005.txt", header = T)
+gz_day6 = read.table("../data/DESeq2_DEgenes_D6treated_D6control_FDR005.txt", header = T)
+
+gz_4ctrl = read.table("../data/DESeq2_DEgenes_D4control_Naivecontrol_FDR005.txt", header = T)
+gz_6ctrl = read.table("../data/DESeq2_DEgenes_D6control_Naivecontrol_FDR005.txt", header = T)
+
+xi_chip_old = read.table("../data/Anno_Xbp1_DA_merged_summits.txt", header = T, sep = "\t", comment.char = "", quote = "")
+xi_chip = read.table("../data/homer_annotation_Veh_Xbp1_highCon_summits.txt", header = T, sep = "\t", comment.char = "", quote = "")
+xi_chip_treat = read.table("../data/homer_annotation_4m8c_Xbp1_highCon_summits.txt", header = T, sep = "\t", comment.char = "", quote = "")
+
+genes_muscle = unique(read.table("../data/genes_XBP1_muscle_all.txt", header = F, stringsAsFactors = F)[,1])
+
+norm_expression = read.table("../data/normcounts_withNaive.txt")
+```
+
+
+
+Load reference
+
+```{r}
+mm_tf = read.table("../data/Mus_musculus_transcription_factors_gene_list.txt", 
+                   header = T, comment.char = "", sep = "\t")[,c(1,3)]
+
+mm.pairs <- readRDS(system.file("exdata", "mouse_cycle_markers.rds", package="scran"))
+mm_cc = data.frame("gene" = unique(unlist(mm.pairs)),
+                   "class" = "Cell Cylce")
+colnames(mm_cc) = colnames(mm_tf)
+#mm_tf = rbind(mm_tf, mm_cc)
+
+#mart <- biomaRt::useMart(biomart = "ENSEMBL_MART_ENSEMBL",
+#                         dataset = "mmusculus_gene_ensembl",
+#                         host = "www.ensembl.org")
+#t2g <- biomaRt::getBM(attributes = c("ensembl_gene_id",
+#                                     "external_gene_name"),
+#                      mart = mart)
+t2g = read.csv("../data/t2g.csv", header = T, row.names = 1)
+
+mm_tf = merge(mm_tf, t2g, by = 1, all.x = T)
+
+tf_chip = unique(as.character(xi_chip$Gene.Name[xi_chip$Gene.Name %in% mm_tf$external_gene_name]))
+tf_chip_treat = unique(as.character(xi_chip_treat$Gene.Name[xi_chip_treat$Gene.Name %in% mm_tf$external_gene_name]))
+```
+
+
+
+# DE only
+Intersection of DE genes (just checking)
+
+```{r, fig.height=4, fig.width=10}
+DE_genes = list("xi_4" = as.character(xi_day4$gene),
+                "xi_6" = as.character(xi_day6$gene),
+                "gz_4" = rownames(gz_day4),
+                "gz_6" = rownames(gz_day6))
+
+par(mfrow = c(1, 3), mar = rep(0.9,4))
+venn(DE_genes)
+title("All")
+venn(DE_genes[c(1,3)])
+title("Day 4")
+venn(DE_genes[c(2,4)])
+title("Day 6")
+```
+
+
+
+GO Terms all DE
+
+```{r}
+de_list = list("Day4_treat" = gz_day4, 
+               "Day6_treat" = gz_day6,
+               "Day4_ctrl" = gz_4ctrl[gz_4ctrl$padj<=0.05 & abs(gz_4ctrl$log2FoldChange)>=2,], 
+               "Day6_ctrl" = gz_6ctrl[gz_6ctrl$padj<=0.05 & abs(gz_6ctrl$log2FoldChange)>=2,])
+
+go_plt_list = list()
+for(n in names(de_list)){
+    de_df = de_list[[n]][order(abs(de_list[[n]]$log2FoldChange), decreasing = T), ]
+    print(n)
+    gp = gprofiler(rownames(de_df), organism = "mmusculus", ordered_query = T, 
+                   hier_filtering = "moderate", correction_method = "fdr")
+    
+    titlego = switch(n, 
+                     Day4_treat = "Day 4 Control vs Treatment",
+                     Day6_treat = "Day 6 Control vs Treatment",
+                     Day4_ctrl = "Naive T cell vs Day 4 Control",
+                     Day6_ctrl = "Naive T cell vs Day 6 Control")
+    
+    go_plt_list[[paste0(n, "_BP")]] = plotGOsig(gp, titleplot = paste0(titlego, "\nBiological Process"))
+    go_plt_list[[paste0(n, "_keg")]] = plotGOsig(gp, domain = "keg", titleplot = paste0(titlego, "\nKEGG Pathways"))
+}
+
+pdf("./plot_repository/GO_DE_top.pdf", paper = "a4", height = 10.5, width = 7.6)
+grid.arrange(go_plt_list$Day4_ctrl_BP, go_plt_list$Day4_ctrl_keg,
+             go_plt_list$Day6_ctrl_BP, go_plt_list$Day6_ctrl_keg,
+             go_plt_list$Day4_treat_BP, go_plt_list$Day4_treat_keg,
+             go_plt_list$Day6_treat_BP, go_plt_list$Day6_treat_keg, 
+             nrow = 4, ncol = 2)
+dev.off()
+```
+
+
+
+# ChIP stuff
+ChIP - DE list
+
+```{r}
+chip_rna = merge(xi_chip[,c("Gene.Name", "Annotation", "Peak.Score")], gz_4ctrl[,c(2,6)], 
+                 by.x = 1, by.y = 0, all = T)
+chip_rna = merge(chip_rna, gz_6ctrl[,c(2,6)], by.x = 1, by.y = 0, all = T)
+chip_rna = merge(chip_rna, gz_day4[,c(2,6)], by.x = 1, by.y = 0, all = T)
+chip_rna = merge(chip_rna, gz_day6[,c(2,6)], by.x = 1, by.y = 0, all = T)
+
+colnames(chip_rna) = c("Gene Name", "Peak Annotation", "Peak Score",
+                       "log2FC_Naive_vs_Day4", "padjust_Naive_vs_Day4", 
+                       "log2FC_Naive_vs_Day6", "padjust_Naive_vs_Day6",
+                       "log2FC_Day4_Ctrl_vs_Treat", "padjust_Day4_Ctrl_vs_Treat", 
+                       "log2FC_Day6_Ctrl_vs_Trea", "padjust_Day6_Ctrl_vs_Treat")
+
+write.table(chip_rna, file = "./plot_repository/chip_rna.txt", 
+            col.names = T, row.names = F, quote = F, sep = "\t")
+```
+
+
+
+Transcription factors intersected by ChIP, compare with DE
+
+```{r}
+tf_chip = unique(as.character(xi_chip$Gene.Name[xi_chip$Gene.Name %in% mm_tf$external_gene_name]))
+print(tf_chip)
+
+genes = list("TF with ChIP peaks" = tf_chip,
+             "Day 4 Control\nvs Treatment" = rownames(gz_day4),
+             "Day 6 Control\nvs Treatment" = rownames(gz_day6),
+             "Day 4 Control\nvs Treatment - TF" = rownames(gz_day4)[rownames(gz_day4) %in% mm_tf$external_gene_name],
+             "Day 6 Control\nvs Treatment - TF" = rownames(gz_day6)[rownames(gz_day6) %in% mm_tf$external_gene_name],
+             "Naive vs Day 4" = rownames(gz_4ctrl),
+             "Naive vs Day 6" = rownames(gz_6ctrl))
+
+pdf("./plot_repository/Venn_TF_DE_ChIP.pdf", useDingbats = F,
+    width = 5, height = 5)
+par(mfrow = c(2, 2), mar = rep(1, 4))
+for(i in 2:5){
+    sub_genes = genes[c(1,i)]
+    x = venn(sub_genes)
+    print(intersect(sub_genes[[1]], sub_genes[[2]]))
+}
+dev.off()
+```
+
+
+
+Compare with genes found in muscle
+
+```{r}
+pdf(paste0("./plot_repository/Venn_compare_to_muscle.pdf"), 
+    useDingbats = F, width = 7.25, height = 2.5)
+par(mfrow = c(1, 3), mar = rep(0.9,4))
+venn(list("Genes Muscle" = genes_muscle, "Day 4 Control\nvs Treatment" = DE_genes[[3]]))
+venn(list("Genes Muscle" = genes_muscle, "Day 6 Control\nvs Treatment" = DE_genes[[4]]))
+venn(list("Genes Muscle" = genes_muscle, 
+          "Genes with\nChIP peaks" = as.character(xi_chip$Gene.Name)))
+dev.off()
+```
+
+
+
+More Venns
+
+```{r}
+pdf("./plot_repository/D6_chip_venn.pdf", height = 3.6, width = 3.6, useDingbats = F)
+par(mar = rep(1, 4))
+venn(list("Genes Muscle" = genes_muscle, "Day 6 Control\nvs Treatment" = DE_genes[[4]], 
+          "ChIP-seq genes" = unique(as.character(xi_chip$Gene.Name))))
+venn(list("Genes Muscle" = genes_muscle, "Day 6 Control vs Treatment\nin ChIP-seq" = intersect(DE_genes[[4]],xi_chip$Gene.Name)))
+dev.off()
+
+x = list("Genes Muscle" = genes_muscle,
+         "Day 6 ControlvsTreatment" = DE_genes[[4]],
+         "ChIP-seq genes" = unique(xi_chip$Gene.Name))
+
+table_venn = reshape2::dcast(reshape2::melt(x), formula = value ~ L1)
+table_venn$`ChIP-seq genes` = ifelse(is.na(table_venn$`ChIP-seq genes`), 0, 1)
+table_venn$`Genes Muscle` = ifelse(is.na(table_venn$`Genes Muscle`), 0, 1)
+table_venn$`Day 6 ControlvsTreatment` = ifelse(is.na(table_venn$`Day 6 ControlvsTreatment`), 
+                                               0, 1)
+write.table(table_venn, file = "table_venn_muscle.txt", sep = "\t", 
+            col.names = T, row.names = T, quote = F)
+```
+
+
+
+## GO Terms
+gprofiler for ChIP intersected genes
+
+```{r}
+list_genes = list("Day4" = rownames(gz_day4),
+                  "Day6" = rownames(gz_day6),
+                  "ChIP" = as.character(xi_chip$Gene.Name),
+                  "Day 4 Treatment and ChIP" = intersect(rownames(gz_day4), as.character(xi_chip$Gene.Name)),
+                  "ChIP_notDay4" = setdiff(as.character(xi_chip$Gene.Name), rownames(gz_day4)),
+                  "notChIP_Day4" = setdiff(rownames(gz_day4), as.character(xi_chip$Gene.Name)),
+                  "Day 6 Treatment and ChIP" = intersect(rownames(gz_day6), as.character(xi_chip$Gene.Name)),
+                  "ChIP_notDay6" = setdiff(as.character(xi_chip$Gene.Name), rownames(gz_day6)),
+                  "notChIP_Day6" = setdiff(rownames(gz_day6), as.character(xi_chip$Gene.Name)),
+                  "Day4_Day6" = intersect(rownames(gz_day4), rownames(gz_day6)),
+                  "just_Day4" = setdiff(rownames(gz_day4), rownames(gz_day6)),
+                  "just_Day6" = intersect(rownames(gz_day6), rownames(gz_day4)),
+                  "Day 6 Treatment and ChIP and Muscle" = intersect(intersect(rownames(gz_day6), as.character(xi_chip$Gene.Name)), genes_muscle))
+
+list_go = list()
+for(n in names(list_genes)){
+    list_go[[n]] = gprofiler(list_genes[[n]], organism = "mmusculus", 
+                             significant = T, correction_method = "fdr", 
+                             hier_filtering = "moderate")
+}
+```
+
+
+
+Plot top BP and KEGG DE + ChIP
+
+```{r}
+list_plt = list()
+for(n in names(list_go)[c(4,7)]){
+    
+    for(categ in c("BP", "keg")){
+        cc = paste0(n, "_", categ)
+        subtit = ifelse(cc=="BP", "\nBiological Process", "\nKEGG Pathways")
+        list_plt[[paste0(n, "_", cc)]] = plotGOsig(list_go[[n]], domain = categ, 
+                                   titleplot = paste0(n, subtit))
+    }
+}
+
+pdf("./plot_repository/ChIP_DE_GO.pdf", useDingbats = F, width = 7.5, height = 6)
+grid.arrange(list_plt[[1]], list_plt[[2]],
+             list_plt[[3]], list_plt[[4]], nrow = 2, ncol = 2)
+dev.off()
+```
+
+
+
+Plot only ChIP and D6
+
+```{r}
+write.csv(list_genes$`Day 6 Treatment and ChIP`, "D6T_ChIP.csv", quote = F, col.names = F, row.names = F)
+# submit to gprofiler
+go_D6 = read.csv("./gprofiler_results_1059189561290.txt", header = 1, sep = "\t")
+go_D6 = go_D6[complete.cases(go_D6),]
+colnames(go_D6)[c(3,10,12)] = c("p.value", "domain", "term.name")
+
+list_plt = list()
+for(categ in c("BP", "keg")){
+    subtit = ifelse(categ=="BP", "\nBiological Process", "\nKEGG Pathways")
+    list_plt[[categ]] = plotGOsig(go_D6, domain = categ, 
+                               titleplot = paste0("Day 6", subtit))
+}
+
+pdf("./plot_repository/ChIP_DE_GO_D6_only.pdf", useDingbats = F, width = 6, height = 3.3)
+grid.arrange(list_plt[[1]], list_plt[[2]],
+             nrow = 1, ncol = 2)
+dev.off()
+```
+
+
+
+
+Plot ER pathway, FC 4 and 6 days
+
+```{r}
+all_de = unique(c(rownames(gz_day4), rownames(gz_day6)))
+all_de_n = unique(rownames(gz_4ctrl), rownames(gz_6ctrl))
+all_de_df = data.frame(row.names = all_de,
+                       "FC_Day4" = gz_day4[all_de,"log2FoldChange"],
+                       "FC_Day6" = gz_day6[all_de,"log2FoldChange"])
+all_de_n_df = data.frame(row.names = all_de_n,
+                       "FC_Day4_naive" = gz_4ctrl[all_de_n,"log2FoldChange"],
+                       "FC_Day6_naive" = gz_6ctrl[all_de_n,"log2FoldChange"])
+
+setwd("./plots_high/")
+for(n in 1:2){
+    sub_df = data.frame(row.names = rownames(all_de_df),
+                        all_de_df[,n])
+    pathview(sub_df, species = "mmu", pathway.id = "04141", 
+             gene.idtype = "SYMBOL", 
+             low = "dodgerblue3", mid = "white", high = "red2", na.col = "grey80", 
+             bins = list(gene = 22), 
+             out.suffix = colnames(all_de_df)[n],
+             limit = list(gene = c(-3, 3)), kegg.native = F, res = 600)
+    
+    pathview(sub_df, species = "mmu", pathway.id = "04141", 
+             gene.idtype = "SYMBOL", 
+             low = "dodgerblue3", mid = "white", high = "red2", na.col = "grey80", 
+             bins = list(gene = 22), 
+             out.suffix = paste0(colnames(all_de_df)[n], "_native"),
+             limit = list(gene = c(-3, 3)), kegg.native = T, res = 600)
+}
+
+for(n in 1:2){
+    sub_df = data.frame(row.names = rownames(all_de_n_df),
+                        all_de_n_df[,n])
+    pathview(sub_df, species = "mmu", pathway.id = "04141", 
+             gene.idtype = "SYMBOL", 
+             low = "dodgerblue3", mid = "white", high = "red2", na.col = "grey80", 
+             bins = list(gene = 22), 
+             out.suffix = colnames(all_de_n_df)[n],
+             limit = list(gene = c(-3, 3)), kegg.native = F, res = 600)
+    
+    pathview(sub_df, species = "mmu", pathway.id = "04141", 
+             gene.idtype = "SYMBOL", 
+             low = "dodgerblue3", mid = "white", high = "red2", na.col = "grey80", 
+             bins = list(gene = 22), 
+             out.suffix = paste0(colnames(all_de_n_df)[n], "_native"),
+             limit = list(gene = c(-3, 3)), kegg.native = T, res = 600)
+}
+
+setwd("..")
+```
+
+
+
+# Heatmap FC
+Heatmap FC Top genes
+
+```{r, fig.height=7.6, fig.width=5.6}
+de_tables = list("Day4" = gz_day4, "Day6" = gz_day6)
+
+df_de_list = list()
+for(n in names(de_tables)){
+    sub_de_table = de_tables[[n]]
+    sub_de_table$inchip = ifelse(rownames(sub_de_table) %in% xi_chip$Gene.Name, "yes", "no")
+    sub_de_table = sub_de_table[sub_de_table$inchip=="yes",]
+    sub_de_table = sub_de_table[order(sub_de_table$log2FoldChange, 
+                                      decreasing = T),]
+    df_de_list[[n]] = rownames(sub_de_table)
+}
+df_de_list$Both = intersect(df_de_list$Day6, df_de_list$Day4)
+df_de_list$Day4_only = df_de_list$Day4[!df_de_list$Day4 %in% df_de_list$Both]
+df_de_list$Day6_only = df_de_list$Day6[!df_de_list$Day6 %in% df_de_list$Both]
+
+genes_plot = c(head(df_de_list$Day4_only, 12), tail(df_de_list$Day4_only, 12),
+               head(df_de_list$Day6_only, 12), tail(df_de_list$Day6_only, 12),
+               head(df_de_list$Both, 12), tail(df_de_list$Both, 12))
+
+genes_plot_ud = c(head(df_de_list$Day4_only, 12), head(df_de_list$Day6_only, 12),
+                  head(df_de_list$Both, 12), 
+                  tail(df_de_list$Day4_only, 12), tail(df_de_list$Day6_only, 12),
+                  tail(df_de_list$Both, 12))
+
+# Top 12 Up in Both, Top 12 Down in Both, same for Day 4, same for Day 6 
+
+pdf("./plot_repository/Heatmap_DE_ChIP.pdf", useDingbats = F, height = 7.9, width = 4)
+pheatmap::pheatmap(log2(norm_expression[genes_plot, c(1:12)]+1), 
+                   clustering_method = "ward.D2", 
+                   color = colorRampPalette(c("blue", "grey92", "red"))(200),
+                   scale = "row", gaps_row = c(12, 24, 24, 36, 48, 48, 60), 
+                   gaps_col = c(3, 6, 6, 9), border_color = "grey32",
+                   cluster_rows = F, cluster_cols = F, fontsize_row = 7.6, fontsize_col = 9,
+                   labels_col = c("D4 ctrl rep1", "D4 ctrl rep2", "D4 ctrl rep3",
+                                  "D4 4m8c rep1", "D4 4m8c rep2", "D4 4m8c rep3",
+                                  "D6 ctrl rep1", "D6 ctrl rep2", "D6 ctrl rep3",
+                                  "D6 4m8c rep1", "D6 4m8c rep2", "D6 4m8c rep3"))
+
+pheatmap::pheatmap(log2(norm_expression[genes_plot_ud, c(1:12)]+1), 
+                   clustering_method = "ward.D2", 
+                   color = colorRampPalette(c("blue", "grey92", "red"))(200),
+                   scale = "row", gaps_row = c(12, 24, 36, 36, 48, 60), 
+                   gaps_col = c(3, 6, 6, 9), border_color = "grey32",
+                   cluster_rows = F, cluster_cols = F, fontsize_row = 7.6, fontsize_col = 9,
+                   labels_col = c("D4 ctrl rep1", "D4 ctrl rep2", "D4 ctrl rep3",
+                                  "D4 4m8c rep1", "D4 4m8c rep2", "D4 4m8c rep3",
+                                  "D6 ctrl rep1", "D6 ctrl rep2", "D6 ctrl rep3",
+                                  "D6 4m8c rep1", "D6 4m8c rep2", "D6 4m8c rep3"))
+dev.off()
+```
+
+
+
+Heatmap FC Top genes only D6
+
+```{r, fig.height=7.6, fig.width=5.6}
+de_tables = list("Day6" = gz_day6)
+
+df_de_list = list()
+for(n in names(de_tables)){
+    sub_de_table = de_tables[[n]]
+    sub_de_table$inchip = ifelse(rownames(sub_de_table) %in% xi_chip$Gene.Name, "yes", "no")
+    sub_de_table$inchip_old = ifelse(rownames(sub_de_table) %in% xi_chip_old$Gene.Name, "yes", "no")
+    sub_de_table = sub_de_table[sub_de_table$inchip=="yes",]
+    sub_de_table = sub_de_table[order(sub_de_table$log2FoldChange, decreasing = T),]
+    df_de_list[[n]] = rownames(sub_de_table)
+}
+
+genes_plot = c(head(df_de_list$Day6, 38), tail(df_de_list$Day6, 38))
+
+# Top 12 Up in Both, Top 12 Down in Both, same for Day 4, same for Day 6 
+
+pdf("./plot_repository/Heatmap_DE_ChIP_D6.pdf", useDingbats = F, height = 7.5, width = 3)
+pheatmap::pheatmap(log2(norm_expression[genes_plot, c(7:12)]+1), 
+                   clustering_method = "ward.D2", 
+                   color = colorRampPalette(c("blue", "grey92", "red"))(200),
+                   scale = "row", gaps_row = c(38), 
+                   gaps_col = c(3), border_color = "grey32",
+                   cluster_rows = F, cluster_cols = F, fontsize_row = 7, fontsize_col = 9,
+                   labels_col = c("D6 ctrl rep1", "D6 ctrl rep2", "D6 ctrl rep3",
+                                  "D6 4m8c rep1", "D6 4m8c rep2", "D6 4m8c rep3"))
+dev.off()
+
+# save DE table with XBP1 binding info
+de_tables$Day6$has_XBP1_peak = c("no", "yes")[(rownames(de_tables$Day6) %in% xi_chip$Gene.Name)+1]
+write.csv(de_tables$Day6, file = "DE_D6_ChIP.csv", col.names = T, row.names = T, quote = F)
+```
+
+
+
+Heatmap means
+
+```{r}
+heat_1 = norm_expression[genes_plot, c(1:12)]
+heat_2 = norm_expression[genes_plot_ud, c(1:12)]
+
+reps = factor(c("D4 ctrl", "D4 ctrl", "D4 ctrl",
+         "D4 4m8c", "D4 4m8c", "D4 4m8c",
+         "D6 ctrl", "D6 ctrl", "D6 ctrl",
+         "D6 4m8c", "D6 4m8c", "D6 4m8c"), 
+         levels = c("D4 ctrl", "D4 4m8c", "D6 ctrl", "D6 4m8c"))
+
+heat_1 = t(apply(heat_1, 1, function(x) tapply(x, reps, mean)))
+heat_2 = t(apply(heat_2, 1, function(x) tapply(x, reps, mean)))
+
+pdf("./plot_repository/Heatmap_DE_ChIP_means.pdf", useDingbats = F, height = 7.5, width = 2.6)
+pheatmap::pheatmap(log2(heat_1+1), 
+                   clustering_method = "ward.D2", 
+                   color = colorRampPalette(c("blue", "grey92", "red"))(200),
+                   scale = "row", gaps_row = c(12, 24, 24, 36, 48, 48, 60), 
+                   gaps_col = c(2, 2), border_color = "grey32",
+                   cluster_rows = F, cluster_cols = F, fontsize_row = 7.6, fontsize_col = 9,
+                   labels_col = levels(reps))
+
+pheatmap::pheatmap(log2(heat_2+1), 
+                   clustering_method = "ward.D2", 
+                   color = colorRampPalette(c("blue", "grey92", "red"))(200),
+                   scale = "row", gaps_row = c(12, 24, 36, 36, 48, 60), 
+                   gaps_col = c(2, 2), border_color = "grey32",
+                   cluster_rows = F, cluster_cols = F, fontsize_row = 7.6, fontsize_col = 9,
+                   labels_col = levels(reps))
+dev.off()
+```
+
+
+
+Heatmap means D6
+
+```{r}
+heat_1 = norm_expression[genes_plot, c(7:12)]
+
+reps = factor(c("D6 ctrl", "D6 ctrl", "D6 ctrl",
+         "D6 4m8c", "D6 4m8c", "D6 4m8c"), 
+         levels = c("D6 ctrl", "D6 4m8c"))
+
+heat_1 = t(apply(heat_1, 1, function(x) tapply(x, reps, mean)))
+
+pdf("./plot_repository/Heatmap_DE_ChIP_means_D6.pdf", useDingbats = F, height = 7.5, width = 2.5)
+pheatmap::pheatmap(log2(heat_1+1),
+                   clustering_method = "ward.D2", 
+                   color = colorRampPalette(c("blue", "grey92", "red"))(200),
+                   gaps_row = c(38), 
+                   gaps_col = c(1), border_color = "grey32",
+                   cluster_rows = F, cluster_cols = F, fontsize_row = 7.6, fontsize_col = 9,
+                   labels_col = levels(reps))
+dev.off()
+```
+
+
+
+
+# Network
+## All
+STRING interactions for TFs (ALL ChIP)
+
+```{r}
+de_list = list("gz_day4" = gz_day4,
+               "gz_day6" = gz_day6)
+de_list$gz_day4$gene = rownames(de_list$gz_day4)
+de_list$gz_day6$gene = rownames(de_list$gz_day6)
+
+# list TFs DE
+de_tf_list = lapply(de_list, function(x) x[x$gene %in% mm_tf$external_gene_name,])
+
+# get interactions from STRING
+string_int_all = read.table("../data/10090.protein.actions.v10.txt", 
+                            header = T, sep = "\t")
+string_int = string_int_all[string_int_all$a_is_acting=="t",]
+# use interactions with score above bottom 25%
+string_int = string_int[string_int$score>=101,]
+
+save(de_list, string_int, tf_chip, file = "files.RData")
+
+if(F){ # this has to be run elsewhere
+string_db <- STRINGdb$new(version="10", species=10090,
+                          score_threshold=0, input_directory="")
+
+de_list_st = lapply(de_list, function(x) string_db$map(x, "gene", removeUnmappedRows = T))
+
+tf_casc_list_chip = list()
+
+# DE TFs from STRING - only looking at TFs intersected by ChIP
+for(g in tf_chip){
+    string_id = string_db$mp(g)
+    
+    tf_casc_list_chip[[g]] = string_int[string_int$item_id_a==string_id,]
+    
+    tf_casc_list_chip[[g]]$gz_4 = ifelse(tf_casc_list_chip[[g]]$item_id_b %in% de_list_st$gz_day4$STRING_id, 
+                                         "Y", "N")
+    tf_casc_list_chip[[g]]$gz_6 = ifelse(tf_casc_list_chip[[g]]$item_id_b %in% de_list_st$gz_day6$STRING_id, 
+                                         "Y", "N")
+}
+}
+load("string_db.Rdata")
+
+for(g in names(tf_casc_list_chip)){
+    if(dim(tf_casc_list_chip[[g]])[1]!=0){
+        tf_casc_list_chip[[g]]$prot = unlist(lapply(strsplit(as.character(tf_casc_list_chip[[g]]$item_id_b), ".", fixed = T), 
+                                                    function(y) y[2]))
+        tf_casc_list_chip[[g]] = merge(tf_casc_list_chip[[g]], 
+                                       bm.query_mouse, 
+                                       by.x = "prot", 
+                                       by.y = "ensembl_peptide_id", 
+                                       all.x = T)
+    }
+}
+
+for(g in names(tf_casc_list_chip)){
+    colnames(tf_casc_list_chip[[g]]) = c("protein_to", "STRING_from", "STRING_to",
+                                         colnames(tf_casc_list_chip[[g]])[4:length(colnames(tf_casc_list_chip[[g]]))])
+    tf_casc_list_chip[[g]]$gene_from = rep(g, nrow(tf_casc_list_chip[[g]]))
+}
+
+save(tf_casc_list_chip, file = "./tf_casc_list_chip.RData")
+```
+
+
+
+Make network matrix  
+XBP1, gene_from, FC(x4)[NA if absent], score, external_gene_name, FC(x4)[NA if absent]
+
+```{r}
+load("./tf_casc_list_chip.RData")
+final_df = t(data.frame(rep(0, 11)))
+colnames(final_df) = c("root", "tf_chip_de", "de_df",
+                       "gz_4_fc1", "gz_6_fc1", 
+                       "score_STRING", "mode", "action", "gene_STRING", 
+                       "gz_4_fc2", "gz_6_fc2")
+for(g in names(tf_casc_list_chip)){
+    # is the targeted TF also DE?
+    n = ifelse(g %in% de_list$gz_day4$gene, 
+               ifelse(g %in% de_list$gz_day6$gene, "ChIP_D4_D6", "ChIP_D4"),
+               ifelse(g %in% de_list$gz_day6$gene, "ChIP_D6", "ChIP"))
+    
+    # prepare start of lines
+    line_tab = c("Xbp1", g, n,
+                 ifelse(g %in% de_list$gz_day4$gene, de_list$gz_day4[de_list$gz_day4$gene==g,"log2FoldChange"], NA),
+                 ifelse(g %in% de_list$gz_day6$gene, de_list$gz_day6[de_list$gz_day6$gene==g,"log2FoldChange"], NA))
+    
+    sub_df = if(dim(tf_casc_list_chip[[g]])[1]!=0){
+        tf_casc_list_chip[[g]][,c("gene_from", "score", "mode", "action", "external_gene_name")]
+    } else{
+        t(data.frame(c(g, rep(NA, 4))))
+    }
+    
+    newdf = merge(t(data.frame(line_tab)), sub_df, by.y = 1, by.x = 2)[,c(2,1,3:9)]
+    
+    gz_4_fc2 = c()
+    gz_6_fc2 = c()
+    for(g2 in newdf[,9]){
+        gz_4_fc2 = c(gz_4_fc2, ifelse(g2 %in% de_list$gz_day4$gene, de_list$gz_day4[de_list$gz_day4$gene==g2,"log2FoldChange"], NA))
+        gz_6_fc2 = c(gz_6_fc2, ifelse(g2 %in% de_list$gz_day6$gene, de_list$gz_day6[de_list$gz_day6$gene==g2,"log2FoldChange"], NA))
+    }
+
+    newdf$gz_4_fc2 = gz_4_fc2
+    newdf$gz_6_fc2 = gz_6_fc2
+    
+    colnames(newdf) = colnames(final_df)
+    
+    final_df = rbind(final_df, newdf)
+}
+
+final_df = final_df[-1,]
+
+final_df$action = as.character(final_df$action)
+final_df$action[final_df$action==""] = "unspecified"
+
+write.table(final_df, file ="./plot_repository/table_network_gz_chip.txt", 
+            sep = "\t", quote = F, row.names = F, col.names = T)
+```
+
+
+
+Immediate TF network (by ChIP)
+
+```{r}
+primary_targets = unique(final_df[,1:5])
+more_sec = unique(final_df[,c(2,9)])
+more_sec = more_sec[more_sec$gene_STRING %in% primary_targets$tf_chip_de,]
+more_sec$de_df = primary_targets$de_df[match(more_sec[,2], primary_targets$tf_chip_de)]
+primary_targets$edge_type = rep("primary", nrow(primary_targets))
+more_sec$edge_type = rep("secondary", nrow(more_sec))
+colnames(more_sec) = colnames(primary_targets)[c(1,2,3,6)]
+
+write.table(rbind(primary_targets[,c(1,2,3,6)], more_sec), file ="./plot_repository/table_network_immediate_chip.txt", 
+            sep = "\t", quote = F, row.names = F, col.names = T)
+
+de_dir = c()
+for(i in 1:nrow(primary_targets)){
+    if(is.na(primary_targets[i,"gz_4_fc1"]) & !is.na(primary_targets[i,"gz_6_fc1"])){
+        if(primary_targets[i,"gz_6_fc1"]>0){
+            de_dir = c(de_dir, "up")
+        } else{
+            de_dir = c(de_dir, "down")
+        }
+    }else if(is.na(primary_targets[i,"gz_6_fc1"]) & !is.na(primary_targets[i,"gz_4_fc1"])){
+        if(primary_targets[i,"gz_4_fc1"]>0){
+            de_dir = c(de_dir, "up")
+        } else{
+            de_dir = c(de_dir, "down")
+        }
+    }else if(is.na(primary_targets[i,"gz_6_fc1"]) & is.na(primary_targets[i,"gz_4_fc1"])){
+        de_dir = c(de_dir, NA)
+    }else if(primary_targets[i,"gz_6_fc1"]>0 & primary_targets[i,"gz_4_fc1"]>0){
+        de_dir = c(de_dir, "up")
+    } else if(primary_targets[i,"gz_6_fc1"]<0 & primary_targets[i,"gz_4_fc1"]<0){
+        de_dir = c(de_dir, "down")
+    } else{
+        de_dir = c(de_dir, "both")
+    }
+}
+primary_targets$de_dir = de_dir
+
+write.table(primary_targets[,c(1,2,3,6,7)], 
+            file ="./plot_repository/table_network_immediate_chip_de.txt", 
+            sep = "\t", quote = F, row.names = F, col.names = T)
+```
+
+
+
+Targets of targets
+
+```{r}
+second_tab = unique(final_df[,c(2,3,6,7,9:11)])
+second_tab$de_df2 = ifelse(second_tab$gene_STRING %in% xi_chip$Gene.Name, 
+                           ifelse(!is.na(second_tab$gz_4_fc2), 
+                                  ifelse(!is.na(second_tab$gz_6_fc2), "ChIP_D4_D6", "ChIP_D4"),
+                                  ifelse(!is.na(second_tab$gz_6_fc2), "ChIP_D6", "ChIP")),
+                           ifelse(!is.na(second_tab$gz_4_fc2), 
+                                  ifelse(!is.na(second_tab$gz_6_fc2), "D4_D6", "D4"),
+                                  ifelse(!is.na(second_tab$gz_6_fc2), "D6", "None")))
+
+second_tab = unique(second_tab[c(1,2,5,8,4,3)])
+colnames(second_tab) = c("TF", "Group_TF", "Target", 
+                         "Group_Target", "STRING_mode", "STRING_score")
+
+write.table(second_tab, file ="./plot_repository/table_network_2nd_string.txt", 
+            sep = "\t", quote = F, row.names = F, col.names = T)
+```
+
+
+## D6
+STRING interactions for TFs (ALL ChIP, D6)
+
+```{r}
+de_list = list("gz_day6" = gz_day6)
+de_list$gz_day6$gene = rownames(de_list$gz_day6)
+
+# list TFs DE
+de_tf_list = lapply(de_list, function(x) x[x$gene %in% mm_tf$external_gene_name,])
+
+# get interactions from STRING
+string_int_all = read.table("../data/10090.protein.actions.v10.txt", 
+                            header = T, sep = "\t")
+string_int = string_int_all[string_int_all$a_is_acting=="t",]
+# use interactions with score above bottom 25%
+string_int = string_int[string_int$score>=101,]
+
+load("string_db_D6.Rdata")
+if(F){
+string_db <- STRINGdb$new(version="10", species=10090,
+                          score_threshold=0, input_directory="")
+
+de_list_st = lapply(de_list, function(x) string_db$map(x, "gene", removeUnmappedRows = T))
+
+tf_casc_list_chip = list()
+
+# DE TFs from STRING - only looking at TFs intersected by ChIP
+for(g in tf_chip){
+    string_id = string_db$mp(g)
+    
+    tf_casc_list_chip[[g]] = string_int[string_int$item_id_a==string_id,]
+    
+    tf_casc_list_chip[[g]]$gz_6 = ifelse(tf_casc_list_chip[[g]]$item_id_b %in% de_list_st$gz_day6$STRING_id, 
+                                         "Y", "N")
+}
+}
+
+for(g in names(tf_casc_list_chip)){
+    if(dim(tf_casc_list_chip[[g]])[1]!=0){
+        tf_casc_list_chip[[g]]$prot = unlist(lapply(strsplit(as.character(tf_casc_list_chip[[g]]$item_id_b), ".", fixed = T), 
+                                                    function(y) y[2]))
+        tf_casc_list_chip[[g]] = merge(tf_casc_list_chip[[g]], 
+                                       bm.query_mouse, 
+                                       by.x = "prot", 
+                                       by.y = "ensembl_peptide_id", 
+                                       all.x = T)
+    }
+}
+
+for(g in names(tf_casc_list_chip)){
+    colnames(tf_casc_list_chip[[g]]) = c("protein_to", "STRING_from", "STRING_to",
+                                         colnames(tf_casc_list_chip[[g]])[4:length(colnames(tf_casc_list_chip[[g]]))])
+    tf_casc_list_chip[[g]]$gene_from = rep(g, nrow(tf_casc_list_chip[[g]]))
+}
+
+save(tf_casc_list_chip, file = "./tf_casc_list_chip_D6.RData")
+```
+
+
+
+Make network matrix  
+XBP1, gene_from, FC(x4)[NA if absent], score, external_gene_name, FC(x4)[NA if absent]
+
+```{r}
+final_df = t(data.frame(rep(0, 10)))
+colnames(final_df) = c("root", "tf_chip_de", "de_df",
+                       "gz_6_fc1", 
+                       "score_STRING", "mode", "action", "gene_STRING", 
+                       "gz_6_fc2", "in_drug")
+for(g in names(tf_casc_list_chip)){
+    # is the targeted TF also DE?
+    n = ifelse(g %in% de_list$gz_day6$gene, "ChIP_D6", "ChIP")
+    
+    # prepare start of lines
+    line_tab = c("Xbp1", g, n,
+                 ifelse(g %in% de_list$gz_day6$gene, de_list$gz_day6[de_list$gz_day6$gene==g,"log2FoldChange"], NA))
+    
+    sub_df = if(dim(tf_casc_list_chip[[g]])[1]!=0){
+        tf_casc_list_chip[[g]][,c("gene_from", "score", "mode", 
+                                  "action", "external_gene_name")]
+    } else{
+        t(data.frame(c(g, rep(NA, 4))))
+    }
+    
+    newdf = merge(t(data.frame(line_tab)), sub_df, 
+                  by.y = 1, by.x = 2)[,c(2,1,3:8)]
+    
+    gz_6_fc2 = c()
+    for(g2 in newdf[,8]){
+        gz_6_fc2 = c(gz_6_fc2, ifelse(g2 %in% de_list$gz_day6$gene, de_list$gz_day6[de_list$gz_day6$gene==g2,"log2FoldChange"], NA))
+    }
+    
+    newdf$gz_6_fc2 = gz_6_fc2
+    newdf$in_drug = c("No", "Yes")[(g %in% tf_chip_treat)+1]
+    
+    colnames(newdf) = colnames(final_df)
+    
+    final_df = rbind(final_df, newdf)
+}
+
+final_df = final_df[-1,]
+
+final_df$action = as.character(final_df$action)
+final_df$action[final_df$action==""] = "unspecified"
+
+write.table(final_df, file ="./plot_repository/table_network_gz_chip_D6.txt", 
+            sep = "\t", quote = F, row.names = F, col.names = T)
+
+# table organized
+final_df$isDE2 = ifelse(is.na(final_df$gz_6_fc2), "Not DE", "D6")
+final_df_temp = final_df
+final_df_temp = final_df_temp[final_df_temp$mode %in% c("expression") &
+                                  as.numeric(final_df_temp$score_STRING)>200,]
+temp1 = final_df_temp[,c(1:4,10)]
+temp2 = final_df_temp[,c(2,8,11,9,10)]
+colnames(temp2) = colnames(temp1)
+final_df2 = rbind(temp1, temp2)
+final_df2$de_dir = ifelse(final_df2$gz_6_fc1>0, "up",
+                          ifelse(final_df2$gz_6_fc1<0, "down", "Not DE"))
+final_df2$de_dir[is.na(final_df2$gz_6_fc1)] = "Not DE"
+final_df2$edge_type = c(rep("primary", nrow(temp1)), 
+                        rep("secondary", nrow(temp2)))
+colnames(final_df2) = c("Source", "Target", "Target_type", 
+                        "Target_fc", "In_drug", "Target_dir", "Edge_type")
+final_df2 = unique(final_df2)
+table(final_df2$Target_type, final_df2$Target_dir)
+final_df2 = final_df2[final_df2$Target_type!="Not DE",]
+dim(final_df2)
+write.table(final_df2, 
+            file ="./plot_repository/table_network_gz_chip_D6_org.txt", 
+            sep = "\t", quote = F, row.names = F, col.names = T)
+```
+
+
+
+Immediate TF network (by ChIP)
+
+```{r}
+primary_targets = unique(final_df[,c(1:4,10)])
+more_sec = unique(final_df[,c(2,8,10)])
+more_sec = more_sec[more_sec$gene_STRING %in% primary_targets$tf_chip_de,]
+more_sec$de_df = primary_targets$de_df[match(more_sec[,2],
+                                             primary_targets$tf_chip_de)]
+primary_targets$edge_type = rep("primary", nrow(primary_targets))
+more_sec$edge_type = rep("secondary", nrow(more_sec))
+colnames(more_sec) = colnames(primary_targets)[c(1,2,5,3,6)]
+
+write.table(rbind(primary_targets[,c(1,2,3,6,5)], more_sec), 
+            file ="./plot_repository/table_network_immediate_chip_D6.txt", 
+            sep = "\t", quote = F, row.names = F, col.names = T)
+
+de_dir = c()
+for(i in 1:nrow(primary_targets)){
+    if(!is.na(primary_targets[i,"gz_6_fc1"])){
+        if(primary_targets[i,"gz_6_fc1"]>0){
+            de_dir = c(de_dir, "up")
+        } else{
+            de_dir = c(de_dir, "down")
+        }
+    }else{
+        de_dir = c(de_dir, "Not DE")
+    }
+}
+primary_targets$de_dir = de_dir
+
+write.table(primary_targets[,c(1,2,3,5,6,7)], 
+            file ="./plot_repository/table_network_immediate_chip_de_D6.txt", 
+            sep = "\t", quote = F, row.names = F, col.names = T)
+```
+
+
+
+Targets of targets
+
+```{r}
+second_tab = unique(final_df[,c(2,3,5,6,8,9,10)])
+second_tab$de_df2 = ifelse(second_tab$gene_STRING %in% xi_chip$Gene.Name, 
+                           ifelse(!is.na(second_tab$gz_6_fc2), 
+                                  "ChIP_D6", "ChIP"),
+                           ifelse(!is.na(second_tab$gz_6_fc2), "D6", "None"))
+second_tab$de_dir = ifelse(is.na(second_tab$gz_6_fc2), "Not DE", 
+                           ifelse(second_tab$gz_6_fc2>0, "up", "down"))
+
+second_tab = unique(second_tab[,c(1,2,5,8,4,3,9,7)])
+colnames(second_tab) = c("TF", "Group_TF", "Target", "Group_Target",
+                         "STRING_mode", "STRING_score", "de_dir","in_drug")
+second_tab = second_tab[complete.cases(second_tab),]
+second_tab$STRING_score = as.numeric(second_tab$STRING_score)
+
+write.table(second_tab, 
+            file ="./plot_repository/table_network_2nd_string_D6.txt", 
+            sep = "\t", quote = F, row.names = F, col.names = T)
+
+
+second_tab = second_tab[!second_tab$Group_Target %in% c("None") &
+                            second_tab$STRING_score>200,]
+second_tab$edge_type = rep("secondary", nrow(second_tab))
+
+primary_tab = primary_targets
+primary_tab$de_df1 = rep("ChIP_D6", nrow(primary_tab))
+colnames(primary_tab) = c("TF", "Target", "Group_Target", "FC", 
+                          "in_drug", "edge_type", "de_dir", "Group_TF")
+primary_tab = primary_tab[primary_tab$de_dir!="Not DE",]
+primary_tab = unique(primary_tab)
+
+second_tab = second_tab[second_tab$TF %in% primary_tab$Target,]
+second_tab = second_tab[second_tab$de_dir!="Not DE",]
+
+all_tab = rbind(primary_tab[,c(1,8,5,2,3,6,7)], 
+                second_tab[,c(1,2,8,3,4,9,7)])
+all_tab = unique(all_tab)
+
+write.table(all_tab, 
+            "./plot_repository/table_network_1st2nd_string_D6_only_200.txt", 
+            sep = "\t", quote = F, row.names = F, col.names = T)
+```
+
+
+
+Heatmap of downstream TF's targets
+
+```{r, fig.width=7.1, fig.height=5.5}
+plot_df = second_tab[second_tab$edge_type=="secondary",]
+
+info_df = data.frame(unique(rbind(as.matrix(plot_df[,1:2]),
+                                  as.matrix(plot_df[,3:4]))))
+x = info_df$TF
+
+info_df = data.frame(row.names = x, 
+                     info_df[,-1])
+colnames(info_df) = "ChIP"
+
+x = unique(plot_df[,c(1,3,7)])
+x$de_num = ifelse(x$de_dir=="up", 1, -1)
+plot_df = reshape2::acast(x, TF~Target, 
+                          value.var = "de_num", sum)
+
+pdf("heatmap_second.pdf", useDingbats = F, width=8.2, height=11)
+pheatmap::pheatmap(t(plot_df), clustering_method = "ward.D2", 
+                   annotation_row = info_df, legend = F,
+                   treeheight_row = 0, treeheight_col = 0,
+                   color = c("blue", "grey50", "red"), fontsize = 7.5)
+dev.off()
+```
+
+
+
+
+
+
+# TESTS
+Make network
+
+```{r}
+final_df_net = final_df
+#final_df_net = final_df_net[!apply(final_df_net[,10:11], 1, function(x) all(is.na(x))),]
+final_df_net = final_df_net[final_df_net$mode %in% c("activation", "expression", "binding"),]
+final_df_net$node1 = paste0(final_df_net$tf_chip_de, "_1")
+final_df_net$node2 = paste0(final_df_net$gene_STRING, "_2")
+final_df_net$node2[final_df_net$gene_STRING %in% final_df_net$tf_chip_de] = paste0(final_df_net$gene_STRING[final_df_net$gene_STRING %in% final_df_net$tf_chip_de], "_1")
+final_df_net = final_df_net[,-7]
+final_df_net$node1 = gsub("Xbp1_1", "Xbp1", final_df_net$node1)
+final_df_net$node2 = gsub("Xbp1_1", "Xbp1", final_df_net$node2)
+final_df_net$de_df2 = ifelse(final_df_net$gene_STRING %in% de_list$gz_day4$gene,
+                             ifelse(final_df_net$gene_STRING %in% de_list$gz_day6$gene, "DE_Both", "DE_D4"),
+                             ifelse(final_df_net$gene_STRING %in% de_list$gz_day6$gene, "DE_D6", "None"))
+
+a_df = final_df_net[,c(1, 1, 3:5)]
+a_df$tier = rep("1", nrow(a_df))
+colnames(a_df) = c("name", "alt_name", colnames(final_df_net)[3:5], "tier")
+b_df = final_df_net[,c(11, 2, 3:5)]
+b_df$tier = rep("2", nrow(b_df))
+colnames(b_df) = c("name", "alt_name", colnames(final_df_net)[3:5], "tier")
+c_df = final_df_net[,c(12, 8, 13, 9:10)]
+c_df$tier = rep("3", nrow(c_df))
+colnames(c_df) = c("name", "alt_name", colnames(final_df_net)[3:5], "tier")
+nodes_df = rbind(a_df, #FCs are placeholders in Xbp1
+                 b_df,
+                 c_df)
+nodes_df = nodes_df[!duplicated(nodes_df[,c(1,2)]),]
+nodes_df[nodes_df$name=="Xbp1", "de_df"] = "ChIP_D4_D6"
+
+sub_edges = final_df_net[,c(1, 11, 4:7)]
+sub_edges$score_STRING = rep(1200, nrow(sub_edges))
+sub_edges$action = rep("ChIP", nrow(sub_edges))
+b_df = final_df_net[,c(11, 12, 9:10, 6:7)]
+colnames(sub_edges) = colnames(b_df)
+edges_df = rbind(sub_edges,
+                 b_df)
+edges_df = unique(edges_df)
+colnames(edges_df)[1:2] = c("to", "from")
+edges_df = edges_df[,c(2,1,3:6)]
+edges_df$score_STRING = as.numeric(edges_df$score_STRING)/100
+edges_df = edges_df[order(edges_df$score_STRING, decreasing = T),]
+edges_df = edges_df[!duplicated(edges_df[,1:4]),]
+edges_df$score_STRING = round(edges_df$score_STRING)
+
+edges_df = edges_df[edges_df$score_STRING>=2,]
+nodes_df = nodes_df[nodes_df$name %in% c(edges_df$from, edges_df$to),]
+
+net = graph_from_data_frame(d = edges_df, directed = TRUE, vertices = nodes_df)
+net = simplify(net, remove.multiple = F, remove.loops = F)
+for(i in colnames(edges_df)[3:ncol(edges_df)]){
+    net = set_edge_attr(net, name = i, value = edges_df[,i])
+}
+
+
+write.graph(net, paste0("./network_gz_chip_filt.gml"), format = "gml")
+
+#CHANGE NETWORK, TOO MANY EDGES
+```
+
+
+
+gProfiler for each TF's targets
+
+```{r}
+all_genes = unique(c(de_list$gz_day4$gene, de_list$gz_day6$gene))
+terms_targ = list()
+for(tf in unique(edges_df$from)[edges_df$action=="ChIP"]){
+    sub_edges = edges_df[edges_df$to==tf,]
+    sub_edges = sub_edges[order(sub_edges$score_STRING, decreasing = T),]
+    
+    genes = unlist(lapply(strsplit(sub_edges$from, "_"), function(x) x[1]))
+    genes = genes[genes %in% as.character(nodes_df$alt_name[nodes_df$de_df!="None"])]
+    
+    tf = unlist(lapply(strsplit(tf, "_"), function(x) x[1]))
+    
+    if(length(genes)>2){
+        terms_targ[[tf]] = gprofiler(genes, 
+                                     organism = "mmusculus", 
+                                     ordered_query = T,
+                                     significant = T, 
+                                     correction_method = "fdr", 
+                                     hier_filtering = "moderate")
+    }
+}
+
+all_genes = as.character(nodes_df$alt_name[nodes_df$de_df!="None" & !(is.na(edges_df$gz_4_fc2) & is.na(edges_df$gz_6_fc2))])
+terms_targ_net = list()
+for(tf in unique(edges_df$from)[edges_df$action=="ChIP" & !(is.na(edges_df$gz_4_fc2) & is.na(edges_df$gz_6_fc2))]){
+    sub_edges = edges_df[edges_df$to==tf,]
+    sub_edges = sub_edges[order(sub_edges$score_STRING, decreasing = T),]
+    
+    genes = unlist(lapply(strsplit(sub_edges$from, "_"), function(x) x[1]))
+    genes = genes[genes %in% as.character(nodes_df$alt_name[nodes_df$de_df!="None"])]
+    
+    tf = unlist(lapply(strsplit(tf, "_"), function(x) x[1]))
+    
+    if(length(genes)>2){
+        terms_targ_net[[tf]] = gprofiler(genes, 
+                                         organism = "mmusculus", 
+                                         ordered_query = T,
+                                         significant = T, 
+                                         correction_method = "fdr", 
+                                         hier_filtering = "moderate")
+    }
+}
+
+# Plotting
+for(tf in names(terms_targ)){
+    pdf(paste0("./GOTerms_TF/GO_", tf, ".pdf"), useDingbats = F)
+    print(plotGOsig(terms_targ[[tf]]))
+    dev.off()
+}
+for(tf in names(terms_targ_net)){
+    pdf(paste0("./GOTerms_TF/GO_", tf, "_net.pdf"), useDingbats = F)
+    print(plotGOsig(terms_targ_net[[tf]]))
+    dev.off()
+}
+```
+
